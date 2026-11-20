@@ -1,0 +1,22 @@
+# Drop-in service block for "Still watching?". Put it in your own compose file, or run it on its own with:
+#   docker compose -f compose.example.yaml up -d
+# The disk wake report is not run here: it needs the host's /proc, so it runs on the host (docs/setup.md).
+services:
+  lombo-nap:
+    image: ghcr.io/lombo-forge/lombo-nap:latest   # or build: .
+    container_name: lombo-nap
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      LOMBO_NAP_STATE_FILE: /data/state.json   # keeps the counts across a restart
+    volumes:
+      - nap-data:/data
+    read_only: true
+    mem_limit: 128m
+    # If Jellyfin is in another compose project, join its network:
+    # networks: [media]
+volumes:
+  nap-data:
+# networks:
+#   media:
+#     external: true

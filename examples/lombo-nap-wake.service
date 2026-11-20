@@ -1,0 +1,14 @@
+[Unit]
+Description=LomboNap: record disk power state and process I/O (one sample)
+
+[Service]
+Type=oneshot
+# Edit the path to wherever you installed lombo-nap. Root is needed to read other processes' I/O.
+ExecStart=/opt/lombo-nap/bin/lombo-nap wake sample
+Environment=LOMBO_NAP_WAKE_LOG=/var/lib/lombo-nap/wake.jsonl
+StateDirectory=lombo-nap
+# The sampler only reads /proc and sysfs and appends to its own log.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
