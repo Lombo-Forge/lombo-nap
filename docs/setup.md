@@ -29,7 +29,7 @@ This part must see the host's `/proc`, sysfs and disks, so it runs on the host, 
    (one sample a minute), after editing the paths.
 5. Next day: `sudo lombo-nap wake report --days 1`.
 
-Environment for the host: `LOMBO_NAP_WAKE_LOG` (default `/var/lib/lombo-nap/wake.jsonl`), `LOMBO_NAP_WAKE_KEEP_LINES`.
+Environment for the host: `LOMBO_NAP_WAKE_LOG` (default `/var/lib/lombo-nap/wake.jsonl`), `LOMBO_NAP_WAKE_KEEP_LINES` (the most samples kept when the log is trimmed; the log is also trimmed to its newest half whenever it passes 32 MiB). Each sample keeps the 40 processes that moved the most data since the previous sample, with up to 5 open files each.
 The sampler never needs a Jellyfin key.
 
 ## Going live

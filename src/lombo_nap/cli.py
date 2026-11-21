@@ -28,6 +28,7 @@ class Runner:
         self.cfg, self.jf = cfg, jf
         self.segs: dict[str, list[float]] = {}
         self.tracks = self._load(now)
+        self.prev_tracks: dict[str, core.Track] = {}  # the tracks before the last poll (step drops a stopped one)
 
     def _load(self, now: float) -> dict[str, core.Track]:
         if not self.cfg.state_file:
@@ -53,6 +54,7 @@ class Runner:
                 self.segs[item] = self.jf.segment_ends(item)
         if len(self.segs) > 500:
             self.segs.clear()
+        self.prev_tracks = dict(self.tracks)
         self.tracks, actions = core.step(
             self.tracks,
             sessions,
@@ -118,18 +120,32 @@ def plan(cfg: Config, now: float | None = None) -> int:
 
 def run_once(r: Runner, now: float) -> None:
     actions = r.poll(now)
+    stopped: list[str] = []
+    failed: dict[str, str] = {}  # session id -> label, for stops that did not go through
     for a in actions:
         if r.cfg.dry_run:
             print(f"[dry run] would {a}")
             continue
+        if a.kind == "home" and a.session_id in failed:
+            continue  # the playback is still running: do not pull the screen away
         try:
             r.send(a)
             print(f"[sent] {a}")
+            if a.kind == "stop":
+                stopped.append(a.label)
         except JellyfinError as e:
             print(f"[FAIL] {a}: {e}", file=sys.stderr)  # one client failing must not stop the others
-    stops = [a for a in actions if a.kind == "stop"]
-    if stops and not r.cfg.dry_run and r.cfg.webhook_url:
-        notify.send(r.cfg.webhook_url, "Stopped unattended playback:\n" + "\n".join(a.label for a in stops))
+            if a.kind == "stop":
+                failed[a.session_id] = a.label
+                t = r.prev_tracks.get(a.session_id)
+                if t:  # keep the session, asked already, and try the stop again after one poll
+                    t.prompted_at = now + r.cfg.poll_seconds - r.cfg.grace_seconds
+                    r.tracks[a.session_id] = t
+    if r.cfg.webhook_url and (stopped or failed):
+        parts = ["Stopped unattended playback:\n" + "\n".join(stopped)] if stopped else []
+        if failed:
+            parts.append("Could not stop (will try again):\n" + "\n".join(failed.values()))
+        notify.send(r.cfg.webhook_url, "\n\n".join(parts))
     r.save(now)
 
 
@@ -150,7 +166,7 @@ def run_loop(r: Runner, loop: bool, sleep: Callable[[float], None] = time.sleep)
 def wake_cmd(args: argparse.Namespace, wcfg: WakeConfig, now: float | None = None) -> int:
     root, log = Path(wcfg.host_root), Path(wcfg.log_file)
     if args.what == "sample":
-        snap = sysinfo.take_snapshot(root, int(time.time() if now is None else now))
+        snap = sysinfo.take_snapshot(root, int(time.time() if now is None else now), prev=sysinfo.last_snapshot(log))
         if not snap.disks:
             print("[warn] no spinning disks found (rotational flag in sysfs); nothing recorded", file=sys.stderr)
             return 1

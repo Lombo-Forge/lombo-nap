@@ -182,13 +182,65 @@ def test_take_snapshot_reads_the_fake_tree(host):
 def test_log_is_appended_trimmed_and_read_back(tmp_path):
     log = tmp_path / "sub/wake.jsonl"
     for i in range(10):
-        sysinfo.append_snapshot(log, snap(i, "standby"), 4)
+        sysinfo.append_snapshot(log, snap(i, "standby"), 4, max_bytes=500)
     snaps = sysinfo.read_snapshots(log)
     assert [s.ts for s in snaps][-1] == 9
-    assert len(snaps) <= 6
+    assert 1 < len(snaps) < 10
+    assert log.stat().st_size <= 500
+    assert [p.name for p in log.parent.iterdir()] == ["wake.jsonl"]  # no temp file left
     log.write_text(log.read_text() + "half-written\n")
     assert len(sysinfo.read_snapshots(log)) == len(snaps)
     assert sysinfo.read_snapshots(tmp_path / "missing") == []
+
+
+def test_trim_reads_only_the_tail_and_swaps_atomically(tmp_path, monkeypatch):
+    log = tmp_path / "wake.jsonl"
+    for i in range(8):
+        sysinfo.append_snapshot(log, snap(i, "standby"), 100, max_bytes=10**6)
+    monkeypatch.setattr(Path, "read_text", lambda *a, **k: pytest.fail("whole log read"))
+    sysinfo.append_snapshot(log, snap(8, "standby"), 100, max_bytes=500)  # over the cap: trims
+    assert sysinfo.last_snapshot(log) == snap(8, "standby")
+    before = log.read_bytes()
+    monkeypatch.setattr(os, "replace", lambda *a: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(OSError, match="boom"):
+        sysinfo.append_snapshot(log, snap(9, "standby"), 100, max_bytes=len(before))
+    assert log.read_bytes().startswith(before)  # the log itself was never cut short
+    assert [p.name for p in tmp_path.iterdir()] == ["wake.jsonl"]
+
+
+def test_last_snapshot(tmp_path):
+    log = tmp_path / "wake.jsonl"
+    assert sysinfo.last_snapshot(log) is None
+    log.write_text(wake.to_json(snap(1, "standby")) + "\n" + wake.to_json(snap(2, "active")) + "\nhalf-wri")
+    assert sysinfo.last_snapshot(log) == snap(2, "active")
+    assert sysinfo.last_snapshot(log, tail_bytes=4) is None
+
+
+def test_the_kept_processes_are_the_ones_that_grew(host):
+    for n in range(100, 150):  # 50 busy-looking processes whose counters did not move
+        d = host / "proc" / str(n)
+        d.mkdir()
+        (d / "comm").write_text("busy\n")
+        (d / "io").write_text("read_bytes: 9000000000\nwrite_bytes: 0\n")
+    (host / "proc/200").mkdir()
+    (host / "proc/200/comm").write_text("short-job\n")
+    (host / "proc/200/io").write_text("read_bytes: 9000\nwrite_bytes: 0\n")
+    prev = wake.Snapshot(
+        0,
+        {},
+        {str(n): wake.ProcSample("busy", "", 9_000_000_000, 0) for n in range(100, 150)}
+        | {"200": wake.ProcSample("short-job", "", 100, 0)},
+    )
+    s = sysinfo.take_snapshot(host, 60, fake_hdparm, prev)
+    assert len(s.procs) == sysinfo.MAX_PROCS
+    assert "200" in s.procs
+    assert "200" not in sysinfo.take_snapshot(host, 60, fake_hdparm).procs  # lifetime totals alone lose it
+
+
+def test_open_files_per_process_are_capped(host):
+    for i in range(10):
+        os.symlink(f"/mnt/hdd1/tv/{i}.mkv", host / f"proc/42/fd/{i + 10}")
+    assert len(sysinfo.take_snapshot(host, 1, fake_hdparm).procs["42"].paths) == sysinfo.MAX_PATHS
 
 
 def test_hdparm_state_survives_a_missing_binary(monkeypatch):
@@ -209,7 +261,7 @@ def test_report_without_samples(host, tmp_path, capsys):
 def test_wake_sample_report_and_doctor(host, tmp_path, monkeypatch, capsys):
     real = sysinfo.take_snapshot
     monkeypatch.setattr(sysinfo, "hdparm_state", fake_hdparm)
-    monkeypatch.setattr(sysinfo, "take_snapshot", lambda root, now: real(root, now, fake_hdparm))
+    monkeypatch.setattr(sysinfo, "take_snapshot", lambda root, now, prev=None: real(root, now, fake_hdparm, prev))
     wcfg = WakeConfig(str(tmp_path / "w.jsonl"), str(host), 1000)
     assert wake_cmd(args("sample"), wcfg, now=1000) == 0
     assert wake_cmd(args("report"), wcfg) == 0

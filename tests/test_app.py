@@ -150,14 +150,25 @@ def test_live_run_asks_then_stops_and_tells_the_webhook(env, fake, capsys, tmp_p
     assert cli.Runner(cfg, Jellyfin(fake.url, "good-key"), 3710).tracks == {}
 
 
-def test_one_failing_command_does_not_stop_the_others(env, fake, capsys):
+def test_a_failed_stop_is_not_reported_as_done_and_is_retried(env, fake, capsys):
     fake.fail_stop = True
-    cfg = from_env({**env, **LIVE, "LOMBO_NAP_WEBHOOK_URL": ""})
+    cfg = from_env({**env, **LIVE})
     r = cli.Runner(cfg, Jellyfin(fake.url, "good-key"), 0)
     for t in (0, 3600, 3700):
         tick(r, fake, t)
-    assert fake.commands()[-1] == "/Sessions/s1/Command/GoHome"
     assert "[FAIL] stop playback" in capsys.readouterr().err
+    assert "/Sessions/s1/Command/GoHome" not in fake.commands()  # still playing: no go-home
+    alert = fake.posts()[-1]["body"]["content"]
+    assert "Could not stop" in alert
+    assert "Stopped unattended" not in alert
+    assert "s1" in r.tracks  # kept, already asked: eligible for a retry
+    assert r.tracks["s1"].prompted_at is not None
+    fake.fail_stop = False
+    tick(r, fake, 3740)  # one poll later the stop goes through
+    assert fake.commands()[-2:] == ["/Sessions/s1/Playing/Stop", "/Sessions/s1/Command/GoHome"]
+    assert fake.commands().count("/Sessions/s1/Playing/Stop") == 2
+    assert fake.posts()[-1]["body"]["content"].startswith("Stopped unattended")
+    assert r.tracks == {}
 
 
 def test_state_file_that_cannot_be_written_only_warns(env, fake, capsys):
