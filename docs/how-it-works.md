@@ -11,7 +11,8 @@
 
 Every `LOMBO_NAP_POLL_SECONDS` (30 by default; every second while someone is being asked) the app reads
 Jellyfin's session list. For each session playing a movie or episode it remembers when the person last did
-something. When that was `LOMBO_NAP_LIMIT_HOURS` ago (or the same number of titles in a row has passed
+something. When that was `LOMBO_NAP_LIMIT_HOURS` ago, or the hours set for that person in
+`LOMBO_NAP_USER_LIMITS` (between 1 and 6, whatever is written; the user name is matched in any case) (or the same number of titles in a row has passed
 `LOMBO_NAP_MAX_EPISODES`), it sends a message: "Still watching? Pause and play to keep going." If nothing
 happens for `LOMBO_NAP_GRACE_SECONDS`, it sends Stop and then GoHome to that session, and (when a webhook is
 set) tells it. A stopped session starts a fresh count the next time something plays.

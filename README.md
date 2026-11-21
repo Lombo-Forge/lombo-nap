@@ -61,6 +61,7 @@ Everything is an environment variable, listed with defaults in [.env.example](.e
 |---|---|---|
 | `LOMBO_NAP_DRY_RUN` | `true` | Log only. Nothing is sent or stopped. |
 | `LOMBO_NAP_LIMIT_HOURS` | `3` | Hours without interaction before "Still watching?" (1 to 6). |
+| `LOMBO_NAP_USER_LIMITS` | empty | Own limits as `name:hours` pairs, for example `alice:2,bob:4.5`. Hours may be decimal, names match in any case, each is kept between 1 and 6. Everyone else uses `LOMBO_NAP_LIMIT_HOURS`. `doctor` and `plan` show who is on which limit. |
 | `LOMBO_NAP_GRACE_SECONDS` | `120` | Time to answer before playback is stopped. |
 | `LOMBO_NAP_MAX_EPISODES` | `0` | Also ask after this many titles in a row (0 is off). |
 | `LOMBO_NAP_SKIP_USERS` | empty | User names that are never asked or stopped. |

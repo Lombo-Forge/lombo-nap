@@ -7,6 +7,7 @@ Two groups: `from_env` for "Still watching?" (needs Jellyfin) and `wake_from_env
 wake report (needs no Jellyfin, only the log path).
 """
 
+import math
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -25,6 +26,7 @@ class Config:
     dry_run: bool
     poll_seconds: int
     limit_hours: int
+    user_limits: dict[str, float]  # lower-case user name -> limit in seconds
     grace_seconds: int
     max_episodes: int
     skip_users: frozenset[str]
@@ -58,6 +60,31 @@ def _number(raw: str, name: str, low: int, high: int) -> int:
     return value
 
 
+MIN_HOURS, MAX_HOURS = 1, 6
+
+
+def _user_limits(raw: str) -> dict[str, float]:
+    """`name:hours,name:hours` -> {lower-case name: seconds}. Hours may be decimal and are clamped to 1..6."""
+    out: dict[str, float] = {}
+    for entry in (e.strip() for e in raw.split(",")):
+        if not entry:
+            continue
+        name, sep, hours = entry.rpartition(":")
+        name = name.strip().lower()
+        if not sep or not name:
+            raise ConfigError(f"{PREFIX}USER_LIMITS entry {entry!r} must look like name:hours")
+        try:
+            value = float(hours)
+        except ValueError:
+            raise ConfigError(f"{PREFIX}USER_LIMITS entry {entry!r}: hours must be a number") from None
+        if not math.isfinite(value):
+            raise ConfigError(f"{PREFIX}USER_LIMITS entry {entry!r}: hours must be a number")
+        if name in out:
+            raise ConfigError(f"{PREFIX}USER_LIMITS lists {name!r} more than once")
+        out[name] = max(MIN_HOURS, min(MAX_HOURS, value)) * 3600.0
+    return out
+
+
 def from_env(env: dict[str, str]) -> Config:
     def get(name: str, default: str = "") -> str:
         return (env.get(PREFIX + name) or default).strip()
@@ -83,7 +110,8 @@ def from_env(env: dict[str, str]) -> Config:
         webhook_url=webhook,
         dry_run=_truthy(get("DRY_RUN", "true") or "true", "DRY_RUN"),
         poll_seconds=_number(get("POLL_SECONDS", "30"), "POLL_SECONDS", 5, 3600),
-        limit_hours=_number(get("LIMIT_HOURS", "3"), "LIMIT_HOURS", 1, 6),
+        limit_hours=_number(get("LIMIT_HOURS", "3"), "LIMIT_HOURS", MIN_HOURS, MAX_HOURS),
+        user_limits=_user_limits(get("USER_LIMITS")),
         grace_seconds=_number(get("GRACE_SECONDS", "120"), "GRACE_SECONDS", 10, 3600),
         max_episodes=_number(get("MAX_EPISODES", "0"), "MAX_EPISODES", 0, 50),
         skip_users=users,
