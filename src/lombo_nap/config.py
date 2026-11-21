@@ -38,8 +38,14 @@ class WakeConfig:
     keep_lines: int
 
 
-def _truthy(value: str) -> bool:
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+def _truthy(value: str, name: str) -> bool:
+    """Strict on/off: a typo such as DRY_RUN=treu is an error, never a silent 'off'."""
+    word = value.strip().lower()
+    if word in {"1", "true", "yes", "on"}:
+        return True
+    if word in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigError(f"{PREFIX}{name} must be true or false (got {value!r})")
 
 
 def _number(raw: str, name: str, low: int, high: int) -> int:
@@ -75,7 +81,7 @@ def from_env(env: dict[str, str]) -> Config:
         jellyfin_url=url,
         jellyfin_api_key=key,
         webhook_url=webhook,
-        dry_run=_truthy(get("DRY_RUN", "true") or "true"),
+        dry_run=_truthy(get("DRY_RUN", "true") or "true", "DRY_RUN"),
         poll_seconds=_number(get("POLL_SECONDS", "30"), "POLL_SECONDS", 5, 3600),
         limit_hours=_number(get("LIMIT_HOURS", "3"), "LIMIT_HOURS", 1, 6),
         grace_seconds=_number(get("GRACE_SECONDS", "120"), "GRACE_SECONDS", 10, 3600),
