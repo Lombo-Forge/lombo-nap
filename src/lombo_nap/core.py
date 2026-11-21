@@ -45,6 +45,7 @@ class Track:
     is_movie: bool = False
     episodes: int = 1  # titles played since the last interaction, this one included
     label: str = ""
+    user: str = ""  # Jellyfin user name, so the right per-person limit is used
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,11 @@ def _interaction(t: Track, o: dict[str, Any], now: float, seg_ends: list[float])
     return False
 
 
+def limit_for(user: str, default: float, user_limits: dict[str, float] | None) -> float:
+    """The limit in seconds for one person: their own entry (names match in any case), else the default."""
+    return (user_limits or {}).get(user.lower(), default)
+
+
 def deadline(t: Track, limit: float, now: float) -> float:
     """When this session is due its prompt: `limit` after the last interaction, or, for a movie
     that runs past the limit, a minute after it ends (a pause does not add a runtime)."""
@@ -132,6 +138,7 @@ def step(
     segments: dict[str, list[float]] | None = None,
     max_episodes: int = 0,
     skip_users: frozenset[str] = frozenset(),
+    user_limits: dict[str, float] | None = None,
 ) -> tuple[dict[str, Track], list[Action]]:
     """One poll. Returns (new tracks, actions). Nothing is sent here; the caller decides (dry run)."""
     out = {k: t for k, t in tracks.items() if now - t.seen_at <= RETAIN}
@@ -152,10 +159,11 @@ def step(
             if o["item"] != t.item_id:
                 t.item_id, t.series_id, t.is_movie = o["item"], o["series"], o["movie"]
             t.pos, t.runtime, t.paused, t.seen_at = o["pos"], o["runtime"], o["paused"], now
-        t.label = o["label"]
+        t.label, t.user = o["label"], o["user"]
         out[key] = t
+        own = limit_for(t.user, limit, user_limits)
         if t.prompted_at is None:
-            if now >= deadline(t, limit, now) or (max_episodes and t.episodes > max_episodes):
+            if now >= deadline(t, own, now) or (max_episodes and t.episodes > max_episodes):
                 t.prompted_at = now
                 actions.append(Action("message", key, t.label))
         elif now - t.prompted_at >= grace:
@@ -169,20 +177,35 @@ def wait_seconds(tracks: dict[str, Track], poll: float) -> float:
     return 1.0 if any(t.prompted_at is not None for t in tracks.values()) else poll
 
 
-def summary(tracks: dict[str, Track], limit: float, now: float) -> list[str]:
+def summary(
+    tracks: dict[str, Track], limit: float, now: float, user_limits: dict[str, float] | None = None
+) -> list[str]:
     """One line per tracked session, for `plan`."""
     lines = []
     for t in tracks.values():
         quiet = int((now - t.quiet_since) // 60)
-        left = int(max(0.0, deadline(t, limit, now) - now) // 60)
+        own = limit_for(t.user, limit, user_limits)
+        left = int(max(0.0, deadline(t, own, now) - now) // 60)
         state = "asked, waiting for an answer" if t.prompted_at is not None else f"would be asked in {left} min"
-        lines.append(f"{t.label}: no interaction for {quiet} min, {t.episodes} title(s) in a row, {state}")
+        rest = f"{t.episodes} title(s) in a row, {state} (limit {own / 3600:g} h)"
+        lines.append(f"{t.label}: no interaction for {quiet} min, {rest}")
     return lines
 
 
 def dump_tracks(tracks: dict[str, Track], now: float) -> dict[str, Any]:
     """Counts survive a restart; positions do not (the first poll has nothing to compare)."""
-    keep = ("item_id", "series_id", "runtime", "paused", "quiet_since", "prompted_at", "is_movie", "episodes", "label")
+    keep = (
+        "item_id",
+        "series_id",
+        "runtime",
+        "paused",
+        "quiet_since",
+        "prompted_at",
+        "is_movie",
+        "episodes",
+        "label",
+        "user",
+    )
     return {"at": now, "tracks": {k: {f: getattr(t, f) for f in keep} for k, t in tracks.items()}}
 
 
@@ -204,6 +227,7 @@ def load_tracks(data: Any, now: float) -> dict[str, Track]:
                 bool(v["is_movie"]),
                 int(v.get("episodes", 1)),
                 str(v.get("label", "")),
+                str(v.get("user", "")),
             )
             for k, v in data["tracks"].items()
         }

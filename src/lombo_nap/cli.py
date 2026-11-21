@@ -64,6 +64,7 @@ class Runner:
             self.segs,
             self.cfg.max_episodes,
             self.cfg.skip_users,
+            self.cfg.user_limits,
         )
         return actions
 
@@ -74,6 +75,12 @@ class Runner:
             self.jf.stop(a.session_id)
         else:
             self.jf.go_home(a.session_id)
+
+
+def limits_text(cfg: Config) -> str:
+    """Which limit each person is on, for `doctor` and `plan`."""
+    own = ", ".join(f"{n} {s / 3600:g} h" for n, s in sorted(cfg.user_limits.items())) or "none"
+    return f"{cfg.limit_hours} h for everyone else; own limits: {own}"
 
 
 def doctor(cfg: Config) -> int:
@@ -104,6 +111,7 @@ def doctor(cfg: Config) -> int:
             ok = False
     print(f"[ ok ] webhook: {'set' if cfg.webhook_url else 'not set (alerts are skipped)'}")
     print(f"[ ok ] state file: {cfg.state_file or 'not set (counts restart with the app)'}")
+    print(f"[ ok ] limits: {limits_text(cfg)}")
     print(f"[ ok ] mode: {'dry run (nothing is sent or stopped)' if cfg.dry_run else 'LIVE'}")
     return 0 if ok else 1
 
@@ -112,7 +120,8 @@ def plan(cfg: Config, now: float | None = None) -> int:
     now = time.time() if now is None else now
     r = Runner(cfg, Jellyfin(cfg.jellyfin_url, cfg.jellyfin_api_key), now)
     actions = r.poll(now)
-    lines = core.summary(r.tracks, cfg.limit_hours * 3600.0, now) + [str(a) for a in actions]
+    lines = core.summary(r.tracks, cfg.limit_hours * 3600.0, now, cfg.user_limits) + [str(a) for a in actions]
+    print(f"Limits: {limits_text(cfg)}")
     print("\n".join(lines) or "Nobody is playing a movie or episode.")
     print("(a plan sees one moment: counting starts when the app first sees a session)")
     return 0
