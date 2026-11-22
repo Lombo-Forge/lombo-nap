@@ -9,6 +9,9 @@ services:
     env_file: .env
     environment:
       LOMBO_NAP_STATE_FILE: /data/state.json   # keeps the counts across a restart
+      # For a panel (docs/contracts.md): own limits it can change, and what the app tracks
+      # LOMBO_NAP_LIMITS_FILE: /data/limits.json
+      # LOMBO_NAP_STATUS_FILE: /data/status.json
     volumes:
       - nap-data:/data
     read_only: true

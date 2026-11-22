@@ -27,8 +27,10 @@ a forward jump of up to 3 minutes, a jump to the last 90 seconds, a jump onto th
 or recap segment (read from Jellyfin's media segments, so skip-intro plugins are not mistaken for people).
 A movie longer than the limit is allowed to finish. Users in `LOMBO_NAP_SKIP_USERS` are ignored.
 
-A session that disappears for less than two minutes (between two episodes) keeps its count. With
-`LOMBO_NAP_STATE_FILE` the counts are saved at every poll and picked up after a restart if younger than ten
+The own hours come from `LOMBO_NAP_LIMITS_FILE` (read again every round; wins) and `LOMBO_NAP_USER_LIMITS` (read at start). Details and what a damaged file does: [contracts.md](contracts.md#the-limits-file). When `LOMBO_NAP_STATUS_FILE` is set, every round also writes what is tracked to it ([contracts.md](contracts.md#the-status-document)).
+
+A session that disappears for less than two minutes (between two episodes) keeps its count. If Jellyfin stops answering, the loop retries at the normal poll pace, not every second. With
+`LOMBO_NAP_STATE_FILE` the counts are saved (written to a temporary file and renamed) at every poll and picked up after a restart if younger than ten
 minutes; positions are not saved, so the first poll after a restart only restores the clock.
 
 ## The wake report

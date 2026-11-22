@@ -6,6 +6,7 @@
 - [Nothing is ever stopped](#nothing-is-ever-stopped)
 - [Someone was stopped who was watching](#someone-was-stopped-who-was-watching)
 - [The message does not appear](#the-message-does-not-appear)
+- [A limit I wrote is not applied](#a-limit-i-wrote-is-not-applied)
 - [The wake report is empty](#the-wake-report-is-empty)
 
 ## doctor says FAIL
@@ -31,6 +32,10 @@ that does not report its playback position looks like a paused or seeking one; o
 
 Some clients ignore on-screen messages from the server (not verified per client). The stop still follows after
 the grace period. Try a longer grace period and test on the client in question.
+
+## A limit I wrote is not applied
+
+Run `lombo-nap doctor`: the `limits file` line says `ok`, `missing` or `damaged` (the log has one `[warn] limits file ... ignored` line saying why). `damaged` means the whole file is ignored and the last good one stays. Common causes: `version` is not `1`, hours written as text (`"2"`), a name listed twice, the file path is a different one inside the container. The name must match the Jellyfin user name (any case). A person already being asked keeps that question; the new hours apply from the next count.
 
 ## The wake report is empty
 

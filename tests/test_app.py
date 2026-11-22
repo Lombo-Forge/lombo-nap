@@ -202,3 +202,30 @@ def test_main_reports_a_jellyfin_error_from_plan(env, capsys):
 
 def test_session_helper_matches_what_core_reads():
     assert core.observe(session())["label"] == "alice on Living room TV (Some Show - Pilot)"
+
+
+def test_the_state_file_is_written_atomically(env, fake, tmp_path):
+    state = tmp_path / "state.json"
+    cfg = from_env({**env, "LOMBO_NAP_STATE_FILE": str(state)})
+    r = cli.Runner(cfg, Jellyfin(fake.url, "good-key"), 0)
+    r.poll(0)
+    r.save(0)
+    assert json.loads(state.read_text())["tracks"]
+    assert not (tmp_path / "state.json.tmp").exists()
+
+
+def test_a_failing_jellyfin_is_retried_at_the_poll_pace_not_every_second(env, fake):
+    cfg = from_env({**env, "LOMBO_NAP_LIMIT_HOURS": "1"})
+    r = cli.Runner(cfg, Jellyfin(fake.url, "good-key"), 0)
+    r.tracks = {"s1": core.Track("e1", "show", None, 1500, False, 0, 0, prompted_at=0.0, user="alice")}
+    fake.key = "rotated"  # every call now fails
+    slept: list[float] = []
+
+    def stop_after_two(s: float) -> None:
+        slept.append(s)
+        if len(slept) == 2:
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.run_loop(r, True, stop_after_two)
+    assert slept == [30.0, 30.0]
