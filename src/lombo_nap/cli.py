@@ -2,6 +2,7 @@
 
 lombo-nap doctor                 check the settings and that Jellyfin answers; exit 1 on any failure
 lombo-nap plan                   show who is playing and what would happen; changes nothing, ever
+lombo-nap status [--json]       show what the running app is tracking (needs LOMBO_NAP_STATUS_FILE)
 lombo-nap run [--loop]           ask "Still watching?" and stop (only when DRY_RUN=false)
 lombo-nap wake sample            record the disks' power state and process I/O (every minute, as root)
 lombo-nap wake report [--days N] what woke the disks
@@ -15,10 +16,13 @@ import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
-from . import __version__, core, notify, sysinfo, wake
+from . import __version__, core, notify, status, sysinfo, wake
 from .config import Config, ConfigError, WakeConfig, from_env, wake_from_env
+from .files import atomic_write
 from .jellyfin import Jellyfin, JellyfinError
+from .limits import LimitsFile
 
 
 class Runner:
@@ -27,8 +31,13 @@ class Runner:
     def __init__(self, cfg: Config, jf: Jellyfin, now: float):
         self.cfg, self.jf = cfg, jf
         self.segs: dict[str, list[float]] = {}
+        self.limits_file = LimitsFile(cfg.limits_file)
         self.tracks = self._load(now)
         self.prev_tracks: dict[str, core.Track] = {}  # the tracks before the last poll (step drops a stopped one)
+
+    def user_limits(self) -> dict[str, float]:
+        """Own limits in seconds: the limits file wins over LOMBO_NAP_USER_LIMITS, name by name."""
+        return {**self.cfg.user_limits, **self.limits_file.limits}
 
     def _load(self, now: float) -> dict[str, core.Track]:
         if not self.cfg.state_file:
@@ -41,12 +50,13 @@ class Runner:
     def save(self, now: float) -> None:
         if self.cfg.state_file:
             try:
-                Path(self.cfg.state_file).write_text(json.dumps(core.dump_tracks(self.tracks, now)))
+                atomic_write(self.cfg.state_file, json.dumps(core.dump_tracks(self.tracks, now)))
             except OSError as e:
                 print(f"[warn] could not save {self.cfg.state_file}: {e}", file=sys.stderr)
 
     def poll(self, now: float) -> list[core.Action]:
         """Read the sessions and update the counts. Sends nothing."""
+        self.limits_file.refresh()
         sessions = [s for s in self.jf.sessions() if s.get("NowPlayingItem")]
         for s in sessions:
             item = (s["NowPlayingItem"]).get("Id")
@@ -64,7 +74,7 @@ class Runner:
             self.segs,
             self.cfg.max_episodes,
             self.cfg.skip_users,
-            self.cfg.user_limits,
+            self.user_limits(),
         )
         return actions
 
@@ -77,9 +87,9 @@ class Runner:
             self.jf.go_home(a.session_id)
 
 
-def limits_text(cfg: Config) -> str:
+def limits_text(cfg: Config, user_limits: dict[str, float]) -> str:
     """Which limit each person is on, for `doctor` and `plan`."""
-    own = ", ".join(f"{n} {s / 3600:g} h" for n, s in sorted(cfg.user_limits.items())) or "none"
+    own = ", ".join(f"{n} {s / 3600:g} h" for n, s in sorted(user_limits.items())) or "none"
     return f"{cfg.limit_hours} h for everyone else; own limits: {own}"
 
 
@@ -111,7 +121,12 @@ def doctor(cfg: Config) -> int:
             ok = False
     print(f"[ ok ] webhook: {'set' if cfg.webhook_url else 'not set (alerts are skipped)'}")
     print(f"[ ok ] state file: {cfg.state_file or 'not set (counts restart with the app)'}")
-    print(f"[ ok ] limits: {limits_text(cfg)}")
+    lf = LimitsFile(cfg.limits_file)
+    lf.refresh()
+    own = {**cfg.user_limits, **lf.limits}
+    print(f"[{'warn' if lf.state == 'damaged' else ' ok '}] limits file: {cfg.limits_file or 'not set'} ({lf.state})")
+    print(f"[ ok ] limits: {limits_text(cfg, own)}")
+    print(f"[ ok ] status file: {cfg.status_file or 'not set (no status document is written)'}")
     print(f"[ ok ] mode: {'dry run (nothing is sent or stopped)' if cfg.dry_run else 'LIVE'}")
     return 0 if ok else 1
 
@@ -120,8 +135,8 @@ def plan(cfg: Config, now: float | None = None) -> int:
     now = time.time() if now is None else now
     r = Runner(cfg, Jellyfin(cfg.jellyfin_url, cfg.jellyfin_api_key), now)
     actions = r.poll(now)
-    lines = core.summary(r.tracks, cfg.limit_hours * 3600.0, now, cfg.user_limits) + [str(a) for a in actions]
-    print(f"Limits: {limits_text(cfg)}")
+    lines = core.summary(r.tracks, cfg.limit_hours * 3600.0, now, r.user_limits()) + [str(a) for a in actions]
+    print(f"Limits: {limits_text(cfg, r.user_limits())}")
     print("\n".join(lines) or "Nobody is playing a movie or episode.")
     print("(a plan sees one moment: counting starts when the app first sees a session)")
     return 0
@@ -156,19 +171,76 @@ def run_once(r: Runner, now: float) -> None:
             parts.append("Could not stop (will try again):\n" + "\n".join(failed.values()))
         notify.send(r.cfg.webhook_url, "\n\n".join(parts))
     r.save(now)
+    write_status(r, now)
+
+
+def build_status(r: Runner, now: float) -> dict[str, Any]:
+    return status.build(
+        r.tracks,
+        now,
+        dry_run=r.cfg.dry_run,
+        limit_hours=r.cfg.limit_hours,
+        grace_seconds=r.cfg.grace_seconds,
+        poll_seconds=r.cfg.poll_seconds,
+        user_limits=r.user_limits(),
+        limits_file=r.limits_file.state,
+    )
+
+
+def write_status(r: Runner, now: float) -> None:
+    if r.cfg.status_file:
+        try:
+            status.write(r.cfg.status_file, build_status(r, now))
+        except OSError as e:
+            print(f"[warn] could not write {r.cfg.status_file}: {e}", file=sys.stderr)
+
+
+def status_cmd(cfg: Config, as_json: bool, now: float | None = None) -> int:
+    """Show the status document the running app wrote. Reads only; counts live in the running app."""
+    if not cfg.status_file:
+        print("[FAIL] LOMBO_NAP_STATUS_FILE is not set, so no status document is written.", file=sys.stderr)
+        return 1
+    try:
+        doc = json.loads(Path(cfg.status_file).read_text())
+        version = doc["version"]
+    except (OSError, ValueError, KeyError, TypeError):
+        print(f"[FAIL] no readable status document at {cfg.status_file} (is `run --loop` going?)", file=sys.stderr)
+        return 1
+    if version != status.VERSION:
+        print(f"[FAIL] status document version {version!r} is not understood", file=sys.stderr)
+        return 1
+    if as_json:
+        print(json.dumps(doc, indent=2))
+        return 0
+    age = int((time.time() if now is None else now) - doc.get("updated", 0))
+    print(f"Updated {age} s ago{' (dry run)' if doc.get('dry_run') else ''}.")
+    for row in doc.get("sessions", []):
+        when = (
+            f"asked, stops in {row['stop_in_seconds']} s"
+            if row["state"] == "asked"
+            else f"asked in {row['ask_in_seconds'] // 60} min"
+        )
+        hours = row["limit_seconds"] / 3600
+        print(f"{row['label']}: {row['titles_in_row']} title(s) in a row, {when} (limit {hours:g} h)")
+    if not doc.get("sessions"):
+        print("Nobody is playing a movie or episode.")
+    return 0
 
 
 def run_loop(r: Runner, loop: bool, sleep: Callable[[float], None] = time.sleep) -> int:
     while True:
+        failed = False
         try:
             run_once(r, time.time())
         except (JellyfinError, notify.NotifyError) as e:
             print(f"[FAIL] {e}", file=sys.stderr)  # a loop survives one bad round
             if not loop:
                 return 1
+            failed = True
         if not loop:
             return 0
-        sleep(core.wait_seconds(r.tracks, float(r.cfg.poll_seconds)))
+        # While Jellyfin does not answer, retry at the normal pace, not every second.
+        sleep(float(r.cfg.poll_seconds) if failed else core.wait_seconds(r.tracks, float(r.cfg.poll_seconds)))
 
 
 # ------------------------------------------------------------------ the wake report
@@ -218,6 +290,8 @@ def main(argv: list[str] | None = None, env: dict[str, str] | None = None) -> in
     sub.add_parser("plan")
     run = sub.add_parser("run")
     run.add_argument("--loop", action="store_true")
+    st = sub.add_parser("status")
+    st.add_argument("--json", action="store_true", help="print the status document (docs/contracts.md)")
     w = sub.add_parser("wake")
     w.add_argument("what", choices=["sample", "report", "doctor"])
     w.add_argument("--days", type=float, default=2.0)
@@ -237,6 +311,8 @@ def main(argv: list[str] | None = None, env: dict[str, str] | None = None) -> in
             return doctor(cfg)
         if args.cmd == "plan":
             return plan(cfg)
+        if args.cmd == "status":
+            return status_cmd(cfg, args.json)
         runner = Runner(cfg, Jellyfin(cfg.jellyfin_url, cfg.jellyfin_api_key), time.time())
         return run_loop(runner, args.loop)
     except JellyfinError as e:

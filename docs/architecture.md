@@ -32,8 +32,10 @@ Names that other code and tests rely on.
 
 | Function | Takes | Returns |
 |---|---|---|
-| `core.step(tracks, sessions, now, limit, grace, segments, max_episodes, skip_users)` | the last poll's `Track`s, Jellyfin's `/Sessions` list, the time in seconds | `(new tracks, [Action])`. An `Action` is `message`, `stop` or `home` for one session. It sends nothing. |
+| `core.step(tracks, sessions, now, limit, grace, segments, max_episodes, skip_users, user_limits)` | the last poll's `Track`s, Jellyfin's `/Sessions` list, the time in seconds | `(new tracks, [Action])`. An `Action` is `message`, `stop` or `home` for one session. It sends nothing. |
 | `core.deadline(track, limit, now)` | one track | when it is due its prompt (a long movie is allowed to finish) |
+| `limits.parse(text)` | the limits file's text | `{lower-case name: seconds}`, or raises `LimitsFileError`. `LimitsFile.refresh()` re-reads and keeps the last good contents. |
+| `status.build(tracks, now, ...)` | the tracks and the settings in force | the status document (a dict); `status.write` stores it atomically |
 | `core.dump_tracks` / `load_tracks` | tracks, time | a JSON-able dict, and back. Old or malformed data gives `{}`. |
 | `wake.parse_diskstats(text)` | `/proc/diskstats` | `{disk: (sectors read, sectors written)}` |
 | `wake.parse_mounts(text)`, `mounts_by_disk` | `/proc/mounts` | mount points per whole disk |

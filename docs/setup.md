@@ -18,6 +18,8 @@
 
 `compose.example.yaml` mounts a small volume for `LOMBO_NAP_STATE_FILE` so a restart keeps the counts.
 
+To let a panel change hours or read what is tracked, add `LOMBO_NAP_LIMITS_FILE` and `LOMBO_NAP_STATUS_FILE` pointing into a folder both can reach (for example `/data/limits.json` and `/data/status.json` on the same volume). The app only reads the limits file; the folder of the status file (and of the state file) must be writable, because they are written by rename. See [contracts.md](contracts.md).
+
 ## The wake report on the host
 
 This part must see the host's `/proc`, sysfs and disks, so it runs on the host, not in the container.

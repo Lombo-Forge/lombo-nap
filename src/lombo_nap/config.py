@@ -31,6 +31,8 @@ class Config:
     max_episodes: int
     skip_users: frozenset[str]
     state_file: str | None
+    limits_file: str | None
+    status_file: str | None
 
 
 @dataclass(frozen=True)
@@ -116,6 +118,8 @@ def from_env(env: dict[str, str]) -> Config:
         max_episodes=_number(get("MAX_EPISODES", "0"), "MAX_EPISODES", 0, 50),
         skip_users=users,
         state_file=get("STATE_FILE") or None,
+        limits_file=get("LIMITS_FILE") or None,
+        status_file=get("STATUS_FILE") or None,
     )
 
 
